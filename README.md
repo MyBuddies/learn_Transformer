@@ -1,5 +1,5 @@
-# learn_Transformer
-## The way to learn Transformer
+# learn_Transformers
+## The way to learn Transformers
 - Transformer
 - Vision Transformer
 - Swin Transformer

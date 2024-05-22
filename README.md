@@ -3,7 +3,7 @@
 - Transformer
 - Vision Transformer
 - Swin Transformer
-  
+
 ## References
 1. [Attention is All you need](https://arxiv.org/abs/1706.03762)
 2. [DASOU讲AI-TRM变体模型解读](https://space.bilibili.com/414678948/channel/seriesdetail?sid=787723)

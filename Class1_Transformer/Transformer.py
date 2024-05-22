@@ -18,6 +18,7 @@ def make_batch(sentences):
     target_batch = [[tgt_vocab[n] for n in sentences[2].split()]]
     return torch.LongTensor(input_batch), torch.LongTensor(output_batch), torch.LongTensor(target_batch)
 
+# 3.位置编码
 def get_sinusoid_encoding_table(n_position, d_model):
     def cal_angle(position, hid_idx):
         return position / np.power(10000, 2 * (hid_idx // 2) / d_model)
@@ -29,6 +30,7 @@ def get_sinusoid_encoding_table(n_position, d_model):
     sinusoid_table[:, 1::2] = np.cos(sinusoid_table[:, 1::2])  # dim 2i+1
     return torch.FloatTensor(sinusoid_table)
 
+# 4.
 def get_attn_pad_mask(seq_q, seq_k):
     batch_size, len_q = seq_q.size()
     batch_size, len_k = seq_k.size()
@@ -53,6 +55,7 @@ class ScaledDotProductAttention(nn.Module):
         context = torch.matmul(attn, V)
         return context, attn
 
+# 6.MultiHeadAttention
 class MultiHeadAttention(nn.Module):
     def __init__(self):
         super(MultiHeadAttention, self).__init__()
@@ -91,6 +94,7 @@ class PoswiseFeedForwardNet(nn.Module):
         output = self.conv2(output).transpose(1, 2)
         return self.layer_norm(output + residual)
 
+# 5.EncoderLayer，包含多头注意力机制和前馈神经网络
 class EncoderLayer(nn.Module):
     def __init__(self):
         super(EncoderLayer, self).__init__()
@@ -98,9 +102,11 @@ class EncoderLayer(nn.Module):
         self.pos_ffn = PoswiseFeedForwardNet()
 
     def forward(self, enc_inputs, enc_self_attn_mask):
+        # 自注意力层，enc_self_attn见6.
         enc_outputs, attn = self.enc_self_attn(enc_inputs, enc_inputs, enc_inputs, enc_self_attn_mask) # enc_inputs to same Q,K,V
         enc_outputs = self.pos_ffn(enc_outputs) # enc_outputs: [batch_size x len_q x d_model]
         return enc_outputs, attn
+
 
 class DecoderLayer(nn.Module):
     def __init__(self):
@@ -110,11 +116,13 @@ class DecoderLayer(nn.Module):
         self.pos_ffn = PoswiseFeedForwardNet()
 
     def forward(self, dec_inputs, enc_outputs, dec_self_attn_mask, dec_enc_attn_mask):
+        
         dec_outputs, dec_self_attn = self.dec_self_attn(dec_inputs, dec_inputs, dec_inputs, dec_self_attn_mask)
         dec_outputs, dec_enc_attn = self.dec_enc_attn(dec_outputs, enc_outputs, enc_outputs, dec_enc_attn_mask)
         dec_outputs = self.pos_ffn(dec_outputs)
         return dec_outputs, dec_self_attn, dec_enc_attn
 
+# 2.编码器部分包含三个部分：词向量Embedding，位置编码和注意力层及后续的前馈神经网络
 class Encoder(nn.Module):
     def __init__(self):
         super(Encoder, self).__init__()
@@ -123,10 +131,13 @@ class Encoder(nn.Module):
         self.layers = nn.ModuleList([EncoderLayer() for _ in range(n_layers)])
 
     def forward(self, enc_inputs): # enc_inputs : [batch_size x source_len]
+        # 位置编码见3
         enc_outputs = self.src_emb(enc_inputs) + self.pos_emb(torch.LongTensor([[1,2,3,4,0]]))
+        # 填充见4
         enc_self_attn_mask = get_attn_pad_mask(enc_inputs, enc_inputs)
         enc_self_attns = []
         for layer in self.layers:
+            # 5.EncoderLayer
             enc_outputs, enc_self_attn = layer(enc_outputs, enc_self_attn_mask)
             enc_self_attns.append(enc_self_attn)
         return enc_outputs, enc_self_attns
@@ -140,8 +151,11 @@ class Decoder(nn.Module):
 
     def forward(self, dec_inputs, enc_inputs, enc_outputs): # dec_inputs : [batch_size x target_len]
         dec_outputs = self.tgt_emb(dec_inputs) + self.pos_emb(torch.LongTensor([[5,1,2,3,4]]))
+        # get_attn_pad_mask 自注意力层的pad部分
         dec_self_attn_pad_mask = get_attn_pad_mask(dec_inputs, dec_inputs)
+        # get_attn_subsequent_mask 自注意力层的mask部分,当前单词之后看不到，使用一个上三角矩阵为1的矩阵
         dec_self_attn_subsequent_mask = get_attn_subsequent_mask(dec_inputs)
+        # 两个矩阵相加，大于0为1，不大于0为0，为1的在之后会被fill到无限小
         dec_self_attn_mask = torch.gt((dec_self_attn_pad_mask + dec_self_attn_subsequent_mask), 0)
 
         dec_enc_attn_mask = get_attn_pad_mask(dec_inputs, enc_inputs)
@@ -153,15 +167,24 @@ class Decoder(nn.Module):
             dec_enc_attns.append(dec_enc_attn)
         return dec_outputs, dec_self_attns, dec_enc_attns
 
+## 1.从网络整体结构来看，分为3部分：编码层，解码层和输出层
 class Transformer(nn.Module):
     def __init__(self):
         super(Transformer, self).__init__()
-        self.encoder = Encoder()
-        self.decoder = Decoder()
+        self.encoder = Encoder() # 编码层
+        self.decoder = Decoder() # 解码层
+        # 输出层，d_model是解码层每个token输出的维度大小，之后会做一个tgt_vocab_size大小的softmax
         self.projection = nn.Linear(d_model, tgt_vocab_size, bias=False)
     def forward(self, enc_inputs, dec_inputs):
+        # 两个输入，编码端输入enc_inputs，形状[batch_size, src_len]；解码端输入dec_inputs，形状[batch_size, tgt_len]
+
+        # enc_outputs编码端主要输出；enc_self_attns代表每个单词和其他单词相关性
         enc_outputs, enc_self_attns = self.encoder(enc_inputs)
+
+        # dec_outputs解码端主要输出，用于后续线性映射；dec_self_attns每个单词对解码器中输入的其余单词的相关性
+        # dec_enc_attns解码器中每个单词对编码器中每个单词相关性
         dec_outputs, dec_self_attns, dec_enc_attns = self.decoder(dec_inputs, enc_inputs, enc_outputs)
+        # dec_outputs做映射到词表大小
         dec_logits = self.projection(dec_outputs) # dec_logits : [batch_size x src_vocab_size x tgt_vocab_size]
         return dec_logits.view(-1, dec_logits.size(-1)), enc_self_attns, dec_self_attns, dec_enc_attns
 
@@ -176,10 +199,24 @@ def showgraph(attn):
     plt.show()
 
 if __name__ == '__main__':
+
+    """以机器翻译为例
+    ## 句子的输入
+    # 'ich mochte ein bier P'：德语-编码端的输入
+    # 'S i want a beer'：英语-解码端的输入
+    # 'i want a beer E'：英语-解码端的真实标签，和解码端的输出去做损失
+
+    P：填充字符-例子给的batch_size是1，真正训练的时候，加快训练速度，batch_size往往不是1。
+                一个batch_size中的句子长度不一样，就需要填充。
+                设置一个最大长度，大于最大长度的句子多的部分就截掉，小于最大长度的句子使用P填充
+    S：开始字符
+    E：结束字符
+    """
     sentences = ['ich mochte ein bier P', 'S i want a beer', 'i want a beer E']
 
     # Transformer Parameters
     # Padding Should be Zero
+    ## 构建词表
     src_vocab = {'P': 0, 'ich': 1, 'mochte': 2, 'ein': 3, 'bier': 4}
     src_vocab_size = len(src_vocab)
 
@@ -190,6 +227,7 @@ if __name__ == '__main__':
     src_len = 5 # length of source
     tgt_len = 5 # length of target
 
+    ## 模型参数
     d_model = 512  # Embedding Size
     d_ff = 2048  # FeedForward dimension
     d_k = d_v = 64  # dimension of K(=Q), V
